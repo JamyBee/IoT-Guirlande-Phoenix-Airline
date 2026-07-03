@@ -1,0 +1,238 @@
+#include <SoftwareSerial.h>
+
+SoftwareSerial BT(10, 11);
+
+const int leds[] = {2, 3, 4, 5, 6, 7, 8, 9}; // éviter pin 1 (TX)
+const int NB_LED = 8;
+const int NB_MODES = 8;
+
+int mode = 0;
+bool autoMode = true;
+bool stopMode = false;
+
+unsigned long previousModeChange = 0;
+const long modeInterval = 5000; // ← réduit à 5s
+
+int vitesse = 150;
+
+const char* nomsModes[] = {
+  "Chenillard", "Alternance", "Poursuite", "Vague", 
+  "Explosion", "Respiration", "Comete", "Aleatoire"
+};
+
+// ───────────── UTILITAIRES ─────────────
+
+void eteindreTout() {
+  for (int i = 0; i < NB_LED; i++) digitalWrite(leds[i], LOW);
+}
+
+void allumerTout() {
+  for (int i = 0; i < NB_LED; i++) digitalWrite(leds[i], HIGH);
+}
+
+void envoyerMode() {
+  BT.print("MODE:");
+  BT.println(nomsModes[mode]);
+}
+
+// ───────────── MODES ─────────────
+
+// Mode 0 — Chenillard classique
+void chenillard() {
+  for (int i = 0; i < NB_LED; i++) {
+    if (stopMode) return;
+    eteindreTout();
+    digitalWrite(leds[i], HIGH);
+    delay(vitesse);
+    verifierBluetooth();
+  }
+}
+
+// Mode 1 — Alternance pairs/impairs
+void alternance() {
+  if (stopMode) return;
+  for (int i = 0; i < NB_LED; i += 2) digitalWrite(leds[i], HIGH);
+  delay(vitesse);
+  eteindreTout();
+  for (int i = 1; i < NB_LED; i += 2) digitalWrite(leds[i], HIGH);
+  delay(vitesse);
+  eteindreTout();
+  verifierBluetooth();
+}
+
+// Mode 2 — Poursuite (2 LEDs)
+void poursuite() {
+  for (int i = 0; i < NB_LED; i++) {
+    if (stopMode) return;
+    eteindreTout();
+    digitalWrite(leds[i], HIGH);
+    if (i > 0) digitalWrite(leds[i - 1], HIGH);
+    delay(vitesse);
+    verifierBluetooth();
+  }
+}
+
+// Mode 3 — Vague (allumage puis extinction progressifs)
+void vague() {
+  for (int i = 0; i < NB_LED; i++) {
+    if (stopMode) return;
+    digitalWrite(leds[i], HIGH);
+    delay(vitesse / 2);
+    verifierBluetooth();
+  }
+  for (int i = 0; i < NB_LED; i++) {
+    if (stopMode) return;
+    digitalWrite(leds[i], LOW);
+    delay(vitesse / 2);
+    verifierBluetooth();
+  }
+}
+
+// Mode 4 — Explosion (du centre vers les bords)
+void explosion() {
+  int centre = NB_LED / 2;
+  eteindreTout();
+  for (int r = 0; r < centre; r++) {
+    if (stopMode) return;
+    int gauche = centre - 1 - r;
+    int droite = centre + r;
+    if (gauche >= 0) digitalWrite(leds[gauche], HIGH);
+    if (droite < NB_LED) digitalWrite(leds[droite], HIGH);
+    delay(vitesse);
+    verifierBluetooth();
+  }
+  delay(vitesse * 2);
+  for (int r = 0; r < centre; r++) {
+    if (stopMode) return;
+    int gauche = r;
+    int droite = NB_LED - 1 - r;
+    if (gauche < droite) {
+      digitalWrite(leds[gauche], LOW);
+      digitalWrite(leds[droite], LOW);
+    }
+    delay(vitesse);
+    verifierBluetooth();
+  }
+}
+
+// Mode 5 — Respiration (clignotement doux toutes LEDs)
+void respiration() {
+  // On simule avec ON/OFF rapide en blocs
+  for (int t = 0; t < 5; t++) {
+    if (stopMode) return;
+    allumerTout();
+    delay(vitesse * 2);
+    eteindreTout();
+    delay(vitesse);
+    verifierBluetooth();
+  }
+  // Pause noire
+  delay(vitesse * 3);
+  verifierBluetooth();
+}
+
+// Mode 6 — Comète (traîne lumineuse)
+void comete() {
+  for (int i = 0; i < NB_LED + 3; i++) {
+    if (stopMode) return;
+    eteindreTout();
+    // Tête
+    if (i < NB_LED) digitalWrite(leds[i], HIGH);
+    // Traîne
+    if (i - 1 >= 0 && i - 1 < NB_LED) {
+      // Simuler demi-intensité : on allume quand même (numérique)
+      digitalWrite(leds[i - 1], HIGH);
+    }
+    delay(vitesse);
+    verifierBluetooth();
+  }
+}
+
+// Mode 7 — Flash aléatoire
+void aleatoire() {
+  eteindreTout();
+  int nb = random(2, NB_LED);
+  for (int i = 0; i < nb; i++) {
+    digitalWrite(leds[random(0, NB_LED)], HIGH);
+  }
+  delay(vitesse);
+  verifierBluetooth();
+}
+
+// ───────────── BLUETOOTH ─────────────
+
+void verifierBluetooth() {
+  if (!BT.available()) return;
+
+  char cmd = BT.read();
+
+  switch (cmd) {
+    case '1': case '2': case '3': case '4':
+    case '5': case '6': case '7': case '8':
+      autoMode = false;
+      stopMode = false;
+      mode = cmd - '1';
+      envoyerMode();
+      break;
+
+    case 'A': // Auto
+      autoMode = true;
+      stopMode = false;
+      BT.println("MODE:Auto");
+      break;
+
+    case 'S': // Stop / éteindre
+      stopMode = true;
+      autoMode = false;
+      eteindreTout();
+      BT.println("MODE:Stop");
+      break;
+
+    case '+': // Accélérer
+      vitesse = max(40, vitesse - 20);
+      BT.print("VIT:");
+      BT.println(vitesse);
+      break;
+
+    case '-': // Ralentir
+      vitesse = min(500, vitesse + 20);
+      BT.print("VIT:");
+      BT.println(vitesse);
+      break;
+  }
+}
+
+// ───────────── SETUP & LOOP ─────────────
+
+void setup() {
+  for (int i = 0; i < NB_LED; i++) pinMode(leds[i], OUTPUT);
+  BT.begin(9600);
+  randomSeed(analogRead(A0));
+}
+
+void loop() {
+  verifierBluetooth();
+
+  if (stopMode) {
+    eteindreTout();
+    delay(50);
+    return;
+  }
+
+  if (autoMode && millis() - previousModeChange > modeInterval) {
+    mode = random(0, NB_MODES);
+    previousModeChange = millis();
+    envoyerMode();
+  }
+
+  switch (mode) {
+    case 0: chenillard();  break;
+    case 1: alternance();  break;
+    case 2: poursuite();   break;
+    case 3: vague();       break;
+    case 4: explosion();   break;
+    case 5: respiration(); break;
+    case 6: comete();      break;
+    case 7: aleatoire();   break;
+  }
+}
